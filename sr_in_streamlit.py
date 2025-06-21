@@ -16,6 +16,8 @@ def main():
         media_stream_constraints={"video": False, "audio": True},
     )
 
+    st.write(webrtc_ctx.state)
+
     if webrtc_ctx.state.playing:
         st.success("Audio streaming started!")
         audio_receiver = webrtc_ctx.audio_receiver
