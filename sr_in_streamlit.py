@@ -1,56 +1,58 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import streamlit_webrtc
 import av
 import io
 import wave
+import numpy as np
 
-st.title("🎤 Simple Audio Recorder with Playback")
-
+# Use session state to store recorded audio frames
 if "audio_frames" not in st.session_state:
-    st.session_state.audio_frames = []
-if "recording" not in st.session_state:
-    st.session_state.recording = False
+    st.session_state["audio_frames"] = []
 
-class AudioRecorder:
-    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        pcm = frame.to_ndarray(format="s16").tobytes()
-        st.session_state.audio_frames.append(pcm)
-        return frame
+def audio_frame_callback(frame: av.AudioFrame) -> av.AudioFrame:
+    """
+    Callback function to process audio frames.
+    Append the frame data to the session state.
+    """
+    st.session_state["audio_frames"].append(frame)
+    return frame  # Return the frame unmodified
 
-# Control buttons
-start = st.button("▶️ Start Recording")
-stop = st.button("🛑 Stop Recording")
+st.title("Microphone Recorder and Player")
 
-if start:
-    st.session_state.audio_frames = []
-    st.session_state.recording = True
+st.write("Click 'START' to begin recording from your microphone.")
+webrtc_ctx = streamlit_webrtc.webrtc_streamer(
+    key="audio-recorder",
+    mode=streamlit_webrtc.WebRtcMode.SENDONLY,  # We only need to send audio
+    audio_receiver_size=1024,
+    media_stream_constraints={"video": False, "audio": True},
+    audio_frame_callback=audio_frame_callback,
+)
 
-if stop:
-    st.session_state.recording = False
-
-if st.session_state.recording:
-    webrtc_ctx = webrtc_streamer(
-        key="audio-recorder",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioRecorder,
-        media_stream_constraints={"audio": True, "video": False},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        async_processing=True,
-    )
+# Playback the recorded audio when recording stops
+if webrtc_ctx.state.playing:
     st.write("Recording...")
+elif webrtc_ctx.state.stopped and st.session_state["audio_frames"]:
+    st.write("Recording stopped.")
 
-if not st.session_state.recording and len(st.session_state.audio_frames) > 0:
-    st.write(f"Recorded {len(st.session_state.audio_frames)} audio frames.")
-    
-    # Save and play audio
-    audio_data = b"".join(st.session_state.audio_frames)
+    # Convert the recorded frames to WAV format
+    recorded_audio_bytes = b""
+    try:
+        # Use a BytesIO object to store the WAV data
+        with io.BytesIO() as buffer:
+            with wave.open(buffer, "wb") as wf:
+                wf.setnchannels(st.session_state["audio_frames"][0].format.channels)
+                wf.setsampwidth(st.session_state["audio_frames"][0].format.bytes)
+                wf.setframerate(st.session_state["audio_frames"][0].rate)
+                for frame in st.session_state["audio_frames"]:
+                    wf.writeframes(frame.to_ndarray().tobytes())
+            recorded_audio_bytes = buffer.getvalue()
 
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(48000)  # streamlit-webrtc default sample rate
-        wf.writeframes(audio_data)
-    buffer.seek(0)
+    except Exception as e:
+        st.error(f"Error processing audio frames: {e}")
 
-    st.audio(buffer, format="audio/wav")
+    if recorded_audio_bytes:
+        st.subheader("Recorded Audio:")
+        st.audio(recorded_audio_bytes, format="audio/wav")
+
+    # Clear the recorded frames
+    st.session_state["audio_frames"] = []
