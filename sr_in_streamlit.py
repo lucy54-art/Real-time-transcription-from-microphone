@@ -108,6 +108,6 @@ if webrtc_ctx.state.playing:
 else:
     st.info("Click Start to begin transcription.")
 
-# Ensure cleanup on script exit
-if not webrtc_ctx.state.playing and webrtc_ctx.state.stopped:
+# Ensure cleanup when webrtc_streamer is not playing
+if not webrtc_ctx.state.playing:
     audio_processor.stop()
