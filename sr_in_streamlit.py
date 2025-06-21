@@ -1,109 +1,96 @@
+# app.py
 import streamlit as st
-import websockets
-import asyncio
-import base64
-import json
-from configure import auth_key
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import av
+import numpy as np
+import requests
+import os
+import tempfile
 
-import pyaudio
+# AssemblyAI API key
+ASSEMBLYAI_API_KEY = st.secrets.get("auth_key") or os.getenv("ASSEMBLYAI_API_KEY")
 
-if 'text' not in st.session_state:
-	st.session_state['text'] = 'Listening...'
-	st.session_state['run'] = False
+st.title("🎙️ Real-time Audio Transcription")
 
- 
-FRAMES_PER_BUFFER = 3200
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 16000
-p = pyaudio.PyAudio()
- 
-# starts recording
-stream = p.open(
-   format=FORMAT,
-   channels=CHANNELS,
-   rate=RATE,
-   input=True,
-   frames_per_buffer=FRAMES_PER_BUFFER
+st.write("Click Start to begin recording your voice.")
+
+# Use a buffer to collect audio chunks
+audio_buffer = []
+
+# Custom audio processor
+class AudioProcessor:
+    def __init__(self) -> None:
+        self.recorded_data = b""
+
+    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+        # Convert audio frame to numpy array and store raw data
+        pcm = frame.to_ndarray().flatten().tobytes()
+        audio_buffer.append(pcm)
+        return frame
+
+# Streamlit WebRTC UI
+webrtc_ctx = webrtc_streamer(
+    key="speech",
+    mode=WebRtcMode.SENDONLY,
+    audio_receiver_size=1024,
+    media_stream_constraints={"audio": True, "video": False},
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    audio_processor_factory=AudioProcessor,
 )
 
-def start_listening():
-	st.session_state['run'] = True
+# When recording is stopped
+if st.button("🛑 Transcribe"):
+    if len(audio_buffer) == 0:
+        st.warning("No audio recorded.")
+    else:
+        st.info("Processing and sending to AssemblyAI...")
 
-def stop_listening():
-	st.session_state['run'] = False
+        # Write raw PCM data to temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            import wave
 
+            wf = wave.open(f.name, "wb")
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit audio
+            wf.setframerate(16000)
+            wf.writeframes(b"".join(audio_buffer))
+            wf.close()
+            audio_file_path = f.name
 
-st.title('Get real-time transcription')
+        # Upload to AssemblyAI
+        headers = {"authorization": ASSEMBLYAI_API_KEY}
+        with open(audio_file_path, "rb") as f:
+            upload_response = requests.post(
+                "https://api.assemblyai.com/v2/upload",
+                headers=headers,
+                files={"file": f},
+            )
+        audio_url = upload_response.json()["upload_url"]
 
-start, stop = st.columns(2)
-start.button('Start listening', on_click=start_listening)
+        # Request transcription
+        transcript_request = {
+            "audio_url": audio_url,
+            "language_code": "en_us"
+        }
+        transcript_response = requests.post(
+            "https://api.assemblyai.com/v2/transcript",
+            json=transcript_request,
+            headers=headers
+        )
 
-stop.button('Stop listening', on_click=stop_listening)
+        transcript_id = transcript_response.json()["id"]
 
-URL = "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000"
- 
+        # Poll for result
+        transcript_text = ""
+        polling_url = f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
+        while True:
+            polling_response = requests.get(polling_url, headers=headers).json()
+            if polling_response["status"] == "completed":
+                transcript_text = polling_response["text"]
+                break
+            elif polling_response["status"] == "error":
+                st.error(f"Transcription failed: {polling_response['error']}")
+                break
 
-async def send_receive():
-	
-	print(f'Connecting websocket to url ${URL}')
-
-	async with websockets.connect(
-		URL,
-		extra_headers=(("Authorization", auth_key),),
-		ping_interval=5,
-		ping_timeout=20
-	) as _ws:
-
-		r = await asyncio.sleep(0.1)
-		print("Receiving SessionBegins ...")
-
-		session_begins = await _ws.recv()
-		print(session_begins)
-		print("Sending messages ...")
-
-
-		async def send():
-			while st.session_state['run']:
-				try:
-					data = stream.read(FRAMES_PER_BUFFER)
-					data = base64.b64encode(data).decode("utf-8")
-					json_data = json.dumps({"audio_data":str(data)})
-					r = await _ws.send(json_data)
-
-				except websockets.exceptions.ConnectionClosedError as e:
-					print(e)
-					assert e.code == 4008
-					break
-
-				except Exception as e:
-					print(e)
-					assert False, "Not a websocket 4008 error"
-
-				r = await asyncio.sleep(0.01)
-
-
-		async def receive():
-			while st.session_state['run']:
-				try:
-					result_str = await _ws.recv()
-					result = json.loads(result_str)['text']
-
-					if json.loads(result_str)['message_type']=='FinalTranscript':
-						print(result)
-						st.session_state['text'] = result
-						st.markdown(st.session_state['text'])
-
-				except websockets.exceptions.ConnectionClosedError as e:
-					print(e)
-					assert e.code == 4008
-					break
-
-				except Exception as e:
-					print(e)
-					assert False, "Not a websocket 4008 error"
-			
-		send_result, receive_result = await asyncio.gather(send(), receive())
-
-
-asyncio.run(send_receive())
+        st.subheader("📝 Transcription Result:")
+        st.success(transcript_text)
