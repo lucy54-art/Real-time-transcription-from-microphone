@@ -33,22 +33,25 @@ def main():
                             audio_array = audio_frame.to_ndarray()
                             audio_buffer.append(audio_array)
 
+                            st.write(f"type(audio_frame) = {type(audio_frame)}")
+                            st.write(f"audio_frame = {audio_frame}")
+
                     except queue.Empty:
                         time.sleep(0.1)
                         continue
 
-                # When the loop finishes (because state.playing became False)
-                if audio_buffer:
-                    st.write(f"type(audio_frames) = {type(audio_frames)}")
-                    st.write(f"audio_frames = {audio_frames}")
-                    combined_audio = np.concatenate(audio_buffer, axis=0)
-                    sample_rate = audio_frames.sample_rate if audio_frames else 44100
-                    format_bytes = audio_frames.format.bytes if audio_frames else 2
+                # # When the loop finishes (because state.playing became False)
+                # if audio_buffer:
+                #     st.write(f"type(audio_frames) = {type(audio_frames)}")
+                #     st.write(f"audio_frames = {audio_frames}")
+                #     combined_audio = np.concatenate(audio_buffer, axis=0)
+                #     sample_rate = audio_frames.sample_rate if audio_frames else 44100
+                #     format_bytes = audio_frames.format.bytes if audio_frames else 2
 
-                    audio_bytes = combined_audio.astype(np.int16).tobytes() if format_bytes == 2 else combined_audio.tobytes()
+                #     audio_bytes = combined_audio.astype(np.int16).tobytes() if format_bytes == 2 else combined_audio.tobytes()
 
-                    st.write("Recorded Audio:")
-                    st.audio(audio_bytes, format='audio/wav', sample_rate=sample_rate)
+                #     st.write("Recorded Audio:")
+                #     st.audio(audio_bytes, format='audio/wav', sample_rate=sample_rate)
 
         # Handle the case when streaming is stopped (state.playing is False)
         # after it was previously True
